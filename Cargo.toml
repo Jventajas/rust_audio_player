@@ -8,3 +8,4 @@ eframe = { version = "0.31.1", features = ["default"] }
 rfd = "0.15.3"
 rodio = "0.20.1"
 walkdir = "2.5"
+dirs = "6.0.0"
