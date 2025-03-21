@@ -1,12 +1,20 @@
 use std::fs::File;
-use eframe::egui::{Slider, Sense, Label};
+use std::io::BufReader;
+use eframe::egui::{Slider, Sense, Label, Color32, FontId, Align2, Stroke, Frame, pos2};
 use std::time::{Duration, Instant};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use eframe::egui::{self, CentralPanel, Context, SidePanel, Button};
 use rfd::FileDialog;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sample, Sink, Source};
 use walkdir::WalkDir;
+use hound;
+use symphonia::core::audio::{AudioBufferRef, Signal};
+use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::probe::Hint;
+use symphonia::default::{get_codecs, get_probe};
 
 #[derive(Default)]
 struct MyApp {
@@ -19,6 +27,7 @@ struct MyApp {
     start_time: Option<Instant>,
     pause_duration: Duration,
     total_duration: Duration,
+    waveform: Vec<f32>,
 }
 
 impl eframe::App for MyApp {
@@ -96,6 +105,38 @@ impl eframe::App for MyApp {
                         self.stop_audio();
                     }
                 });
+
+                Frame::canvas(ui.style()).fill(Color32::BLACK).show(ui, |ui| {
+                    let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::hover());
+
+                    let rect = response.rect;
+                    let mid_y = rect.center().y;
+                    let waveform_width = rect.width();
+                    let waveform_height = rect.height() / 2.0;
+
+                    if !self.waveform.is_empty() {
+                        let step = waveform_width / self.waveform.len() as f32;
+                        for (i, sample) in self.waveform.iter().enumerate() {
+                            let x = rect.left_top().x + step * i as f32;
+                            painter.line_segment(
+                                [
+                                    pos2(x, mid_y - sample * waveform_height),
+                                    pos2(x, mid_y + sample * waveform_height)
+                                ],
+                                Stroke::new(1.0, Color32::LIGHT_GREEN)
+                            );
+                        }
+                    } else {
+                        painter.text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            "No waveform available",
+                            FontId::default(),
+                            Color32::GRAY
+                        );
+                    }
+                });
+
             });
 
             ctx.request_repaint();
@@ -104,6 +145,132 @@ impl eframe::App for MyApp {
 }
 
 impl MyApp {
+
+    fn load_waveform(&mut self, file_path: &str) {
+        // Reset waveform data
+        self.waveform.clear();
+
+        let file = match File::open(file_path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Failed to open file '{}': {:?}", file_path, e);
+                return;
+            }
+        };
+
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+        let hint = Hint::new(); // Empty hint, detection auto
+        let format_opts = FormatOptions::default();
+        let probe = match get_probe().format(&hint, mss, &format_opts, &Default::default()) {
+            Ok(p) => p,
+            Err(err) => {
+                eprintln!("Symphonia probe error: {:?}", err);
+                return;
+            }
+        };
+
+        let mut reader = probe.format;
+        let track = match reader.default_track() {
+            Some(track) => track,
+            None => {
+                eprintln!("No default audio track found");
+                return;
+            }
+        };
+
+        let decoder_opts = DecoderOptions::default();
+        let mut decoder = match get_codecs().make(&track.codec_params, &decoder_opts) {
+            Ok(dec) => dec,
+            Err(err) => {
+                eprintln!("Failed to make decoder: {:?}", err);
+                return;
+            }
+        };
+
+        const DOWN_SAMPLE_RESOLUTION: usize = 500; // adjustable resolution
+        let mut samples = Vec::<f32>::new();
+
+        loop {
+            match reader.next_packet() {
+                Ok(packet) => {
+                    match decoder.decode(&packet) {
+                        Ok(decoded) => match decoded {
+                            AudioBufferRef::F32(buf) => samples.extend(buf.chan(0)),
+                            AudioBufferRef::S16(buf) => {
+                                samples.extend(buf.chan(0).iter().map(|&s| s.to_f32()))
+                            },
+                            AudioBufferRef::U8(buf) => {
+                                samples.extend(buf.chan(0).iter().map(|&s| (s as f32 - 128.0) / 128.0))
+                            },
+                            _ => {},
+                        },
+                        Err(err) => {
+                            eprintln!("Error decoding audio packet: {:?}", err);
+                            continue;
+                        }
+                    }
+                },
+                Err(err) => {
+                    use symphonia::core::errors::Error::*;
+                    match err {
+                        ResetRequired => continue,
+                        IoError(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                        _ => {
+                            eprintln!("Error reading packet: {:?}", err);
+                            break;
+                        }
+                    }
+                },
+            }
+        }
+
+        if !samples.is_empty() {
+            // Down-sample waveform data
+            let chunk_size = samples.len().max(1) / DOWN_SAMPLE_RESOLUTION;
+            self.waveform = samples
+                .chunks(chunk_size)
+                .map(|chunk| {
+                    chunk.iter().copied().sum::<f32>() / chunk.len() as f32
+                })
+                .collect();
+
+            // Normalize waveform amplitudes
+            if let Some(max_amp) = self.waveform.iter().map(|v| v.abs()).fold(None, |max, val| {
+                Some(if let Some(max) = max { val.max(max) } else { val })
+            }) {
+                if max_amp > 0.0 {
+                    self.waveform.iter_mut().for_each(|v| *v /= max_amp);
+                }
+            }
+        } else {
+            eprintln!("No audio samples were decoded from file");
+        }
+    }
+
+    fn play_file(&mut self, file_path: String) {
+        self.stop_audio();
+        self.load_waveform(&file_path); // generates waveform via Symphonia
+
+        let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+        let sink = Sink::try_new(&stream_handle).unwrap();
+
+        let file = File::open(&file_path).unwrap();
+        let decoder = Decoder::new(BufReader::new(file)).unwrap();
+        self.total_duration = decoder.total_duration().unwrap_or_default();
+
+        sink.append(decoder);
+        sink.play();
+
+        self._stream = Some(_stream);
+        self.stream_handle = Some(stream_handle);
+        self.sink = Some(Arc::new(Mutex::new(sink)));
+
+        self.current_file = Some(file_path);
+        self.start_time = Some(Instant::now());
+        self.pause_duration = Duration::default();
+    }
+
     fn scan_audio_files(&mut self) {
         self.audio_files.clear();
         if let Some(ref dir) = self.directory {
@@ -123,27 +290,6 @@ impl MyApp {
                 }
             }
         }
-    }
-
-    fn play_file(&mut self, file_path: String) {
-        // Stop previously playing audio if any
-        self.stop_audio();
-
-        let (_stream, stream_handle) = OutputStream::try_default().expect("Audio output error");
-        self.stream_handle = Some(stream_handle.clone());
-        self._stream = Some(_stream);
-
-        let file = File::open(&file_path).expect("Failed to open audio file");
-        let decoder = Decoder::new(std::io::BufReader::new(file)).expect("Failed to decode audio file");
-        self.total_duration = decoder.total_duration().unwrap_or_default();
-
-        let sink = Sink::try_new(&stream_handle).expect("Failed to create audio sink");
-        sink.append(decoder);
-
-        self.sink = Some(Arc::new(Mutex::new(sink)));
-        self.start_time = Some(Instant::now());
-        self.pause_duration = Duration::ZERO;
-        self.current_file = Some(file_path);
     }
 
     fn pause_audio(&mut self) {

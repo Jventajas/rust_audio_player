@@ -9,3 +9,5 @@ rfd = "0.15.3"
 rodio = "0.20.1"
 walkdir = "2.5"
 dirs = "6.0.0"
+hound = "3.5.1"
+symphonia = { version = "0.5.4", features = ["mp3", "wav", "default"] }
