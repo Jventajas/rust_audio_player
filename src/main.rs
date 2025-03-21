@@ -1,20 +1,19 @@
 use std::fs::File;
 use std::io::BufReader;
-use eframe::egui::{Slider, Sense, Label, Color32, FontId, Align2, Stroke, Frame, pos2};
+use eframe::egui::{Slider, Sense, Label, Color32, FontId, Align2, Stroke, Frame, pos2, Pos2, ScrollArea};
 use std::time::{Duration, Instant};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{Sender, Receiver, channel};
+use symphonia::default::{get_probe, get_codecs};
+use symphonia::core::audio::Signal;
 use eframe::egui::{self, CentralPanel, Context, SidePanel, Button};
 use rfd::FileDialog;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sample, Sink, Source};
 use walkdir::WalkDir;
 use hound;
-use symphonia::core::audio::{AudioBufferRef, Signal};
-use symphonia::core::codecs::DecoderOptions;
-use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
-use symphonia::core::probe::Hint;
-use symphonia::default::{get_codecs, get_probe};
+use symphonia::core::errors::Error;
 
 #[derive(Default)]
 struct MyApp {
@@ -27,248 +26,324 @@ struct MyApp {
     start_time: Option<Instant>,
     pause_duration: Duration,
     total_duration: Duration,
-    waveform: Vec<f32>,
+    waveform_receiver: Option<Receiver<Vec<f32>>>,
+    waveform_buffer: Vec<f32>,
+    sample_rate: u32,
+
 }
 
 impl eframe::App for MyApp {
+
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
-        SidePanel::left("left_panel").show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                if self.directory.is_none() {
-                    if ui.add(Button::new("Choose Directory")).clicked() {
-                        let default_path = dirs::home_dir().unwrap_or_else(|| std::env::current_dir().unwrap());
-                        if let Some(folder) = FileDialog::new().set_directory(default_path).pick_folder() {
-                            self.directory = Some(folder.display().to_string());
-                            self.scan_audio_files();
-                        }
-                    }
-                } else {
-                    ui.label(format!("Directory: {}", self.directory.as_ref().unwrap()));
-                    ui.separator();
+        ctx.request_repaint_after(Duration::from_millis(30));
 
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        let audio_files = self.audio_files.clone();
-                        for file in audio_files {
-                            let file_name = Path::new(&file)
-                                .file_name()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("Unknown or corrupted file");
+        if let Some(receiver) = &self.waveform_receiver {
+            for chunk in receiver.try_iter() {
+                self.waveform_buffer.extend(chunk);
+            }
+        }
 
-                            let response = ui.add(Label::new(file_name).sense(Sense::click()));
-                            if response.double_clicked() {
-                                self.play_file(file.clone());
-                            }
-                        }
-                    });
+        SidePanel::left("side_panel").default_width(200.0).show(ctx, |ui| {
+            ui.heading("Audio Player");
+            ui.separator();
 
-                    if ui.button("Change Directory").clicked() {
-                        let default_path = dirs::home_dir().unwrap_or_else(|| std::env::current_dir().unwrap());
-                        if let Some(folder) = FileDialog::new().set_directory(default_path).pick_folder() {
-                            self.directory = Some(folder.display().to_string());
-                            self.scan_audio_files();
-                        }
+            if ui.button("Select Directory").clicked() {
+                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                    self.directory = Some(dir.display().to_string());
+                    self.scan_audio_files();
+                }
+            }
+
+            ui.separator();
+
+            let mut file_to_play: Option<String> = None;
+
+            ScrollArea::vertical().show(ui, |ui| {
+                for file in &self.audio_files {
+                    let file_name = std::path::Path::new(file)
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string();
+                    if ui
+                        .selectable_label(Some(file) == self.current_file.as_ref(), &file_name)
+                        .clicked()
+                    {
+                        file_to_play = Some(file.clone());
                     }
                 }
             });
+
+            if let Some(file) = file_to_play {
+                self.play_file(file);
+            }
         });
 
         CentralPanel::default().show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.heading("Audio Controls");
-                if let Some(ref current) = self.current_file {
-                    ui.label(Path::new(current).file_name().unwrap().to_str().unwrap_or("Playing"));
-                } else {
-                    ui.label("No song playing");
+            ui.horizontal(|ui| {
+                if ui.button("⏸️ Pause").clicked() {
+                    self.pause_audio();
                 }
-
-                let progress = self.progress().as_secs_f32();
-                let total = self.total_duration.as_secs_f32();
-
-                let ratio = if total > 0.0 { progress / total } else { 0.0 };
-                ui.add(Slider::new(&mut (ratio * 100.0), 0.0..=100.0).text("Progress").show_value(true));
-                ui.horizontal(|ui| {
-                    ui.label(format!("{:.2} sec", progress));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(format!("{:.2} sec", total));
-                    });
-                });
-
-                // Control Buttons
-                ui.horizontal(|ui| {
-                    if ui.button("Play").clicked() && self.sink.is_some() {
-                        self.resume_audio();
-                    }
-                    if ui.button("Pause").clicked() {
-                        self.pause_audio();
-                    }
-                    if ui.button("Stop").clicked() {
-                        self.stop_audio();
-                    }
-                });
-
-                Frame::canvas(ui.style()).fill(Color32::BLACK).show(ui, |ui| {
-                    let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::hover());
-
-                    let rect = response.rect;
-                    let mid_y = rect.center().y;
-                    let waveform_width = rect.width();
-                    let waveform_height = rect.height() / 2.0;
-
-                    if !self.waveform.is_empty() {
-                        let step = waveform_width / self.waveform.len() as f32;
-                        for (i, sample) in self.waveform.iter().enumerate() {
-                            let x = rect.left_top().x + step * i as f32;
-                            painter.line_segment(
-                                [
-                                    pos2(x, mid_y - sample * waveform_height),
-                                    pos2(x, mid_y + sample * waveform_height)
-                                ],
-                                Stroke::new(1.0, Color32::LIGHT_GREEN)
-                            );
-                        }
-                    } else {
-                        painter.text(
-                            rect.center(),
-                            Align2::CENTER_CENTER,
-                            "No waveform available",
-                            FontId::default(),
-                            Color32::GRAY
-                        );
-                    }
-                });
-
+                if ui.button("▶️ Resume").clicked() {
+                    self.resume_audio();
+                }
+                if ui.button("⏹️ Stop").clicked() {
+                    self.stop_audio();
+                }
             });
 
-            ctx.request_repaint();
+            let progress = self.progress().as_secs_f32();
+            let total = self.total_duration.as_secs_f32();
+
+            let ratio = if total > 0.0 { progress / total } else { 0.0 };
+            ui.add(Slider::new(&mut (ratio * 100.0), 0.0..=100.0).text("Progress").show_value(true));
+            ui.horizontal(|ui| {
+                ui.label(format!("{:.2} sec", progress));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(format!("{:.2} sec", total));
+                });
+            });
+
+            ui.separator();
+
+            let progress_secs = self.progress().as_secs_f32();
+            let waveform_len = self.waveform_buffer.len();
+            let samples_played = (progress_secs * self.sample_rate as f32) as usize;
+            let visible_length_samples = (self.sample_rate as usize) * 2;
+
+            let start_idx = samples_played.saturating_sub(visible_length_samples / 2);
+            let end_idx = (start_idx + visible_length_samples).min(waveform_len);
+
+            let displayed_waveform = if start_idx < end_idx {
+                &self.waveform_buffer[start_idx..end_idx]
+            } else {
+                &[]
+            };
+
+            let waveform_rect = ui.available_rect_before_wrap();
+            let painter = ui.painter_at(waveform_rect);
+
+            if !displayed_waveform.is_empty() {
+                let wave_height = waveform_rect.height() / 2.0;
+                let wave_width = waveform_rect.width() / displayed_waveform.len() as f32;
+                let center_y = waveform_rect.center().y;
+
+                let points: Vec<Pos2> = displayed_waveform
+                    .iter()
+                    .enumerate()
+                    .map(|(i, sample)| {
+                        let x = waveform_rect.left_top().x + (i as f32 * wave_width);
+                        let y = center_y - (sample * wave_height);
+                        Pos2 { x, y }
+                    })
+                    .collect();
+
+                painter.add(egui::Shape::line(
+                    points,
+                    Stroke::new(1.5, Color32::LIGHT_BLUE),
+                ));
+            } else {
+                painter.text(
+                    waveform_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "Loading...",
+                    egui::FontId::default(),
+                    Color32::GRAY,
+                );
+            }
+
+            ui.add_space(waveform_rect.height() + 10.0);
+
+            let progress = progress_secs / self.total_duration.as_secs_f32().max(1.0);
+            ui.horizontal(|ui| {
+                ui.label(format!("{:.1} sec", progress_secs));
+                ui.add(egui::ProgressBar::new(progress).show_percentage());
+                ui.label(format!("{:.1} sec", self.total_duration.as_secs_f32()));
+            });
         });
     }
+
 }
 
 impl MyApp {
 
-    fn load_waveform(&mut self, file_path: &str) {
-        // Reset waveform data
-        self.waveform.clear();
+    fn load_waveform_streaming(file_path: String, tx: Sender<Vec<f32>>) {
+        std::thread::spawn(move || {
+            let file = std::fs::File::open(&file_path).expect("Failed to open file");
+            let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
-        let file = match File::open(file_path) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("Failed to open file '{}': {:?}", file_path, e);
-                return;
-            }
-        };
+            let probed = get_probe()
+                .format(&Default::default(), mss, &Default::default(), &Default::default())
+                .expect("Probe failed");
+            let mut format_reader = probed.format;
+            let track = format_reader.default_track().expect("No track found");
+            let codec_params = &track.codec_params;
 
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+            let mut decoder = get_codecs()
+                .make(&codec_params, &Default::default())
+                .expect("Decoder failed");
 
-        let hint = Hint::new(); // Empty hint, detection auto
-        let format_opts = FormatOptions::default();
-        let probe = match get_probe().format(&hint, mss, &format_opts, &Default::default()) {
-            Ok(p) => p,
-            Err(err) => {
-                eprintln!("Symphonia probe error: {:?}", err);
-                return;
-            }
-        };
+            loop {
+                match format_reader.next_packet() {
+                    Ok(packet) => match decoder.decode(&packet) {
+                        Ok(audio_buffer) => {
+                            let channels = audio_buffer.spec().channels.count();
+                            let frames = audio_buffer.frames();
+                            let mut chunk_waveform = Vec::new();
 
-        let mut reader = probe.format;
-        let track = match reader.default_track() {
-            Some(track) => track,
-            None => {
-                eprintln!("No default audio track found");
-                return;
-            }
-        };
-
-        let decoder_opts = DecoderOptions::default();
-        let mut decoder = match get_codecs().make(&track.codec_params, &decoder_opts) {
-            Ok(dec) => dec,
-            Err(err) => {
-                eprintln!("Failed to make decoder: {:?}", err);
-                return;
-            }
-        };
-
-        const DOWN_SAMPLE_RESOLUTION: usize = 500; // adjustable resolution
-        let mut samples = Vec::<f32>::new();
-
-        loop {
-            match reader.next_packet() {
-                Ok(packet) => {
-                    match decoder.decode(&packet) {
-                        Ok(decoded) => match decoded {
-                            AudioBufferRef::F32(buf) => samples.extend(buf.chan(0)),
-                            AudioBufferRef::S16(buf) => {
-                                samples.extend(buf.chan(0).iter().map(|&s| s.to_f32()))
-                            },
-                            AudioBufferRef::U8(buf) => {
-                                samples.extend(buf.chan(0).iter().map(|&s| (s as f32 - 128.0) / 128.0))
-                            },
-                            _ => {},
-                        },
-                        Err(err) => {
-                            eprintln!("Error decoding audio packet: {:?}", err);
-                            continue;
+                            match audio_buffer {
+                                symphonia::core::audio::AudioBufferRef::U8(buf) => {
+                                    for frame in 0..frames {
+                                        let mut sum = 0f32;
+                                        for ch in 0..channels {
+                                            sum += (buf.chan(ch)[frame] as f32 - 128.0) / 128.0;
+                                        }
+                                        chunk_waveform.push(sum / channels as f32);
+                                    }
+                                }
+                                symphonia::core::audio::AudioBufferRef::U16(buf) => {
+                                    for frame in 0..frames {
+                                        let mut sum = 0f32;
+                                        for ch in 0..channels {
+                                            sum += (buf.chan(ch)[frame] as f32 - 32768.0) / 32768.0;
+                                        }
+                                        chunk_waveform.push(sum / channels as f32);
+                                    }
+                                }
+                                symphonia::core::audio::AudioBufferRef::U24(buf) => {
+                                    for frame in 0..frames {
+                                        let mut sum = 0f32;
+                                        for ch in 0..channels {
+                                            let sample = buf.chan(ch)[frame].into_u32() as i32 - 8_388_608;
+                                            sum += (sample as f32 - 8_388_608.0) / 8_388_608.0;
+                                        }
+                                        chunk_waveform.push(sum / channels as f32);
+                                    }
+                                }
+                                symphonia::core::audio::AudioBufferRef::U32(buf) => {
+                                    for frame in 0..frames {
+                                        let mut sum = 0f32;
+                                        for ch in 0..channels {
+                                            sum += (buf.chan(ch)[frame] as f32 - 2_147_483_648.0)
+                                                / 2_147_483_648.0;
+                                        }
+                                        chunk_waveform.push(sum / channels as f32);
+                                    }
+                                }
+                                symphonia::core::audio::AudioBufferRef::S8(buf) => {
+                                    for frame in 0..frames {
+                                        let mut sum = 0f32;
+                                        for ch in 0..channels {
+                                            sum += buf.chan(ch)[frame] as f32 / i8::MAX as f32;
+                                        }
+                                        chunk_waveform.push(sum / channels as f32);
+                                    }
+                                }
+                                symphonia::core::audio::AudioBufferRef::S16(buf) => {
+                                    for frame in 0..frames {
+                                        let mut sum = 0f32;
+                                        for ch in 0..channels {
+                                            sum += buf.chan(ch)[frame] as f32 / i16::MAX as f32;
+                                        }
+                                        chunk_waveform.push(sum / channels as f32);
+                                    }
+                                }
+                                symphonia::core::audio::AudioBufferRef::S24(buf) => {
+                                    for frame in 0..frames {
+                                        let mut sum = 0f32;
+                                        for ch in 0..channels {
+                                            let sample = buf.chan(ch)[frame].into_i32();
+                                            sum += sample as f32 / 8_388_608.0;
+                                        }
+                                        chunk_waveform.push(sum / channels as f32);
+                                    }
+                                }
+                                symphonia::core::audio::AudioBufferRef::S32(buf) => {
+                                    for frame in 0..frames {
+                                        let mut sum = 0f32;
+                                        for ch in 0..channels {
+                                            sum += buf.chan(ch)[frame] as f32 / i32::MAX as f32;
+                                        }
+                                        chunk_waveform.push(sum / channels as f32);
+                                    }
+                                }
+                                symphonia::core::audio::AudioBufferRef::F32(buf) => {
+                                    for frame in 0..frames {
+                                        let mut sum = 0f32;
+                                        for ch in 0..channels {
+                                            sum += buf.chan(ch)[frame];
+                                        }
+                                        chunk_waveform.push(sum / channels as f32);
+                                    }
+                                }
+                                symphonia::core::audio::AudioBufferRef::F64(buf) => {
+                                    for frame in 0..frames {
+                                        let mut sum = 0f32;
+                                        for ch in 0..channels {
+                                            sum += buf.chan(ch)[frame] as f32;
+                                        }
+                                        chunk_waveform.push(sum / channels as f32);
+                                    }
+                                }
+                                _ => {
+                                    // Graceful no-op: Ignore unknown formats or log message.
+                                    eprintln!("Encountered unsupported audio buffer format.");
+                                    continue;
+                                }
+                            }
+                            tx.send(chunk_waveform).expect("Waveform send error");
                         }
-                    }
-                },
-                Err(err) => {
-                    use symphonia::core::errors::Error::*;
-                    match err {
-                        ResetRequired => continue,
-                        IoError(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                        _ => {
-                            eprintln!("Error reading packet: {:?}", err);
-                            break;
-                        }
-                    }
-                },
-            }
-        }
-
-        if !samples.is_empty() {
-            // Down-sample waveform data
-            let chunk_size = samples.len().max(1) / DOWN_SAMPLE_RESOLUTION;
-            self.waveform = samples
-                .chunks(chunk_size)
-                .map(|chunk| {
-                    chunk.iter().copied().sum::<f32>() / chunk.len() as f32
-                })
-                .collect();
-
-            // Normalize waveform amplitudes
-            if let Some(max_amp) = self.waveform.iter().map(|v| v.abs()).fold(None, |max, val| {
-                Some(if let Some(max) = max { val.max(max) } else { val })
-            }) {
-                if max_amp > 0.0 {
-                    self.waveform.iter_mut().for_each(|v| *v /= max_amp);
+                        Err(Error::DecodeError(_)) => continue,
+                        Err(_) => break,
+                    },
+                    Err(Error::IoError(_)) => break,
+                    Err(_) => break,
                 }
             }
-        } else {
-            eprintln!("No audio samples were decoded from file");
-        }
+        });
     }
 
-    fn play_file(&mut self, file_path: String) {
-        self.stop_audio();
-        self.load_waveform(&file_path); // generates waveform via Symphonia
 
-        let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-        let sink = Sink::try_new(&stream_handle).unwrap();
+    pub fn play_file(&mut self, file_path: String) {
+        // Update current file selection
+        self.current_file = Some(file_path.clone());
 
-        let file = File::open(&file_path).unwrap();
-        let decoder = Decoder::new(BufReader::new(file)).unwrap();
-        self.total_duration = decoder.total_duration().unwrap_or_default();
+        // Initialize the sample rate (used for waveform visualization; common default: 44100 Hz)
+        self.sample_rate = 44100;
 
-        sink.append(decoder);
-        sink.play();
+        // Stop previous playback if there's an active sink
+        if let Some(sink) = &self.sink {
+            sink.lock().unwrap().stop();
+        }
 
-        self._stream = Some(_stream);
+        // Create Rodio audio stream (output stream and handle)
+        let (stream, stream_handle) =
+            OutputStream::try_default().expect("Failed to create audio output stream");
+        let sink = Sink::try_new(&stream_handle).expect("Failed to create Sink");
+
+        // Open audio file for rodio playback
+        let file = std::fs::File::open(&file_path).expect("Failed to open audio file");
+        let source = Decoder::new(std::io::BufReader::new(file)).expect("Failed to decode audio file");
+
+        // Attach audio source to the sink (playback)
+        sink.append(source);
+
+        // Store sink and stream resources
         self.stream_handle = Some(stream_handle);
+        self._stream = Some(stream);
         self.sink = Some(Arc::new(Mutex::new(sink)));
 
-        self.current_file = Some(file_path);
+        // Playback timing initialization
         self.start_time = Some(Instant::now());
-        self.pause_duration = Duration::default();
+        self.pause_duration = Duration::ZERO;
+
+        // Channel for waveform streaming
+        let (tx, rx) = channel();
+        self.waveform_receiver = Some(rx);
+        self.waveform_buffer.clear();
+
+        // Launch waveform loading thread (non-blocking)
+        Self::load_waveform_streaming(file_path, tx);
     }
 
     fn scan_audio_files(&mut self) {
