@@ -40,13 +40,13 @@ impl WaveformGenerator {
         });
     }
 
-
     // Updates the buffer with data received on the channel
     pub fn update_buffer(&mut self) {
-        if let Some(receiver) = &self.receiver {
-            for (rate_opt, chunk) in receiver.try_iter() {
+        if let Some(receiver) = &mut self.receiver {
+            let received_data: Vec<_> = receiver.try_iter().collect();
+            for (rate_opt, chunk) in received_data {
                 if let Some(rate) = rate_opt {
-                    self.sample_rate = rate;
+                    self.set_sample_rate(rate);
                 }
                 self.buffer.extend(chunk);
             }
