@@ -1,4 +1,3 @@
-// app.rs
 use crate::audio::player::AudioPlayer;
 use crate::audio::waveform::WaveformGenerator;
 use crate::utils::file_scanner::AudioFileScanner;
@@ -37,8 +36,6 @@ impl Default for MyApp {
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
         ctx.request_repaint_after(Duration::from_millis(30));
-
-        // Update waveform buffer with any new data
         self.waveform.update_buffer();
 
         self.render_ui(ctx);
@@ -105,7 +102,6 @@ impl MyApp {
                 }
             });
 
-            // Progress slider and duration display
             let progress = self.player.progress().as_secs_f32();
             let total = self.total_duration.as_secs_f32();
             let ratio = if total > 0.0 { progress / total } else { 0.0 };
@@ -120,11 +116,8 @@ impl MyApp {
             });
 
             ui.separator();
-
-            // Render waveform visualization
             self.render_waveform(ui);
 
-            // Progress bar at bottom
             let progress_ratio = progress / self.total_duration.as_secs_f32().max(1.0);
             ui.horizontal(|ui| {
                 ui.label(format!("{:.1} sec", progress));
@@ -140,7 +133,6 @@ impl MyApp {
         let waveform_len = waveform_buffer.len();
         let sample_rate = self.waveform.get_sample_rate();
 
-        // Calculate visible portion of waveform
         let samples_played = (progress_secs * sample_rate as f32) as usize;
         let visible_length_samples = (sample_rate as usize) * 2; // Show 2 seconds of audio
 
@@ -191,23 +183,18 @@ impl MyApp {
     fn scan_audio_files(&mut self) {
         if let Some(dir) = &self.directory {
             self.audio_files = AudioFileScanner::scan_directory(dir, 3);
-
-            // Sort alphabetically for better user experience
             self.audio_files.sort();
         }
     }
 
     fn play_file(&mut self, file_path: &str) {
-        // Try to play the file
         if let Err(err) = self.player.play(file_path) {
             eprintln!("Error playing file: {}", err);
             return;
         }
 
-        // Generate waveform data
         self.waveform.generate_for(file_path);
 
-        // Attempt to get duration from file metadata
         match self.get_audio_duration(file_path) {
             Ok(duration) => self.total_duration = duration,
             Err(_) => self.total_duration = Duration::from_secs(180), // Fallback to 3 minutes
@@ -229,7 +216,6 @@ impl MyApp {
         let probed = symphonia::default::get_probe()
             .format(&hint, mss, &format_opts, &metadata_opts)?;
 
-        // Try to calculate duration from the tracks
         if let Some(track) = probed.format.tracks().get(0) {
             if let (Some(n_frames), Some(sample_rate)) = (
                 track.codec_params.n_frames,
