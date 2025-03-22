@@ -3,9 +3,11 @@ mod audio;
 mod utils;
 
 use app::MyApp;
+use eframe::Error;
+use eframe::NativeOptions;
 
-fn main() -> Result<(), eframe::Error> {
-    let options = eframe::NativeOptions::default();
+fn main() -> Result<(), Error> {
+    let options = NativeOptions::default();
 
     eframe::run_native(
         "Audio Player",
