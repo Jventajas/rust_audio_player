@@ -91,13 +91,13 @@ impl MyApp {
         CentralPanel::default().show(ctx, |ui| {
             // Control buttons
             ui.horizontal(|ui| {
-                if ui.button("⏸️ Pause").clicked() {
+                if ui.button("⏸ Pause").clicked() {
                     self.player.pause();
                 }
-                if ui.button("▶️ Resume").clicked() {
+                if ui.button("▶ Resume").clicked() {
                     self.player.resume();
                 }
-                if ui.button("⏹️ Stop").clicked() {
+                if ui.button("⏹ Stop").clicked() {
                     self.player.stop();
                 }
             });
