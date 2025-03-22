@@ -197,7 +197,7 @@ impl MyApp {
 
         match self.get_audio_duration(file_path) {
             Ok(duration) => self.total_duration = duration,
-            Err(_) => self.total_duration = Duration::from_secs(180), // Fallback to 3 minutes
+            Err(_) => self.total_duration = Duration::from_secs(180),
         }
     }
 

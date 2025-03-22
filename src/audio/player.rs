@@ -28,21 +28,16 @@ impl Default for AudioPlayer {
 
 impl AudioPlayer {
     pub fn play(&mut self, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        // Stop previous playback
         self.stop();
 
-        // Create audio stream
         let (stream, stream_handle) = OutputStream::try_default()?;
         let sink = Sink::try_new(&stream_handle)?;
 
-        // Open and decode audio file
         let file = File::open(file_path)?;
         let source = Decoder::new(BufReader::new(file))?;
 
-        // Begin playback
         sink.append(source);
 
-        // Store resources
         self._stream = Some(stream);
         self.stream_handle = Some(stream_handle);
         self.sink = Some(Arc::new(Mutex::new(sink)));
@@ -95,14 +90,6 @@ impl AudioPlayer {
             }
         } else {
             Duration::ZERO
-        }
-    }
-
-    pub fn is_playing(&self) -> bool {
-        if let Some(sink) = &self.sink {
-            !sink.lock().unwrap().is_paused() && self.start_time.is_some()
-        } else {
-            false
         }
     }
 

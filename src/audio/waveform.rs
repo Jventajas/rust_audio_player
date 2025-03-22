@@ -1,18 +1,22 @@
 use std::fs::File;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
-use eframe::egui;
 use symphonia::core::audio::{AudioBufferRef, Signal};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::errors::Error;
 use symphonia::default::{get_codecs, get_probe};
 
 pub struct WaveformGenerator {
-    receiver: Option<Receiver<Vec<f32>>>,
+    // Optional channel receiver to fetch waveform chunks
+    receiver: Option<Receiver<(Option<u32>, Vec<f32>)>>,
+
+    // Buffer to store the waveform data
     buffer: Vec<f32>,
+    // The audio sample rate (e.g., 44100 Hz)
     sample_rate: u32,
 }
 
+// Default implementation to initialize WaveformGenerator with default values
 impl Default for WaveformGenerator {
     fn default() -> Self {
         Self {
@@ -24,301 +28,230 @@ impl Default for WaveformGenerator {
 }
 
 impl WaveformGenerator {
+    // Starts the generation process for the waveform by clearing the buffer and spawning a thread
     pub fn generate_for(&mut self, file_path: &str) {
         self.buffer.clear();
         let (tx, rx) = channel();
         self.receiver = Some(rx);
 
-        // Clone the path for the thread
         let file_path = file_path.to_string();
-
         thread::spawn(move || {
             Self::load_waveform_streaming(file_path, tx);
         });
     }
 
+
+    // Updates the buffer with data received on the channel
     pub fn update_buffer(&mut self) {
         if let Some(receiver) = &self.receiver {
-            for chunk in receiver.try_iter() {
+            for (rate_opt, chunk) in receiver.try_iter() {
+                if let Some(rate) = rate_opt {
+                    self.sample_rate = rate;
+                }
                 self.buffer.extend(chunk);
             }
         }
     }
 
+    // Sets the sample rate of the waveform
     pub fn set_sample_rate(&mut self, rate: u32) {
         self.sample_rate = rate;
     }
 
+    // Retrieves the sample rate
     pub fn get_sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
+    // Retrieves the current waveform buffer
     pub fn get_buffer(&self) -> &[f32] {
         &self.buffer
     }
 
-    fn load_waveform_streaming(file_path: String, tx: Sender<Vec<f32>>) {
-        // Open the file
+    // Loads the audio file in a streaming fashion and processes the waveform
+    fn load_waveform_streaming(file_path: String, tx: Sender<(Option<u32>, Vec<f32>)>) {
         let file = match File::open(&file_path) {
             Ok(f) => f,
-            Err(_) => return, // Silently fail
+            Err(_) => return,
         };
 
-        // Create a media source stream
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
-        // Probe the media source
         let probed = match get_probe().format(
             &Default::default(),
             mss,
             &Default::default(),
-            &Default::default()
+            &Default::default(),
         ) {
             Ok(p) => p,
             Err(_) => return,
         };
 
-        // Get the format reader
         let mut format_reader = probed.format;
 
-        // Get the default track
-        let track = match format_reader.default_track() {
-            Some(t) => t,
-            None => return,
+        let (track_id, sample_rate) = {
+            // Limit the immutable borrow to this block to avoid conflicts
+            let track = match format_reader.default_track() {
+                Some(t) => t,
+                None => return,
+            };
+
+            let rate = track.codec_params.sample_rate;
+            (track.id, rate)
         };
 
-        let codec_params = &track.codec_params;
-
-        // Create a decoder for the track
-        let mut decoder = match get_codecs().make(codec_params, &Default::default()) {
+        let mut decoder = match get_codecs().make(&format_reader.tracks()[track_id as usize].codec_params, &Default::default()) {
             Ok(d) => d,
             Err(_) => return,
         };
 
-        // Extract and set the sample rate if available
-        if let Some(rate) = codec_params.sample_rate {
-            // We can't directly set sample_rate here as it's in another thread,
-            // but the caller could look up the correct sample rate from the file metadata
-            // tx.send(vec![rate as f32]).ok(); // A way to communicate the sample rate
-        }
+        let mut sample_rate_sent = false;
 
-        // Process audio packets
         loop {
-            // Get the next packet from the format reader
             let packet = match format_reader.next_packet() {
                 Ok(p) => p,
                 Err(Error::IoError(_)) => break, // End of file or I/O error
-                Err(_) => continue,              // Skip other errors and try next packet
+                Err(_) => continue,
             };
 
-            // Decode the packet
             match decoder.decode(&packet) {
                 Ok(audio_buffer) => {
+                    if !sample_rate_sent {
+                        if let Some(rate) = sample_rate {
+                            let empty_buf: Vec<f32> = Vec::new();
+                            if tx.send((Some(rate), empty_buf)).is_err() {
+                                break;
+                            }
+                            sample_rate_sent = true;
+                        }
+                    }
+
                     let chunk_waveform = Self::process_audio_buffer(audio_buffer);
                     if !chunk_waveform.is_empty() {
-                        if tx.send(chunk_waveform).is_err() {
-                            break; // Receiver disconnected
+                        if tx.send((None, chunk_waveform)).is_err() {
+                            break; // Disconnected receiver
                         }
                     }
                 }
-                Err(Error::DecodeError(_)) => continue, // Skip decode errors
-                Err(_) => break,                       // Stop on other errors
+                Err(Error::DecodeError(_)) => continue,
+                Err(_) => break,
             }
         }
     }
 
+    // Converts the raw audio buffer into a uniform waveform vector
     fn process_audio_buffer(audio_buffer: AudioBufferRef) -> Vec<f32> {
-        let channels = audio_buffer.spec().channels.count();
-        let frames = audio_buffer.frames();
-        let mut chunk_waveform = Vec::with_capacity(frames);
+        let channels = audio_buffer.spec().channels.count(); // Number of audio channels
+        let frames = audio_buffer.frames(); // Number of audio frames
+        let mut chunk_waveform = Vec::with_capacity(frames); // Initialize a buffer for the waveform chunk
 
-        // Process different sample formats
+        // Match the sample format of the audio buffer and process accordingly
         match audio_buffer {
             AudioBufferRef::U8(buf) => {
+                // Process unsigned 8-bit PCM samples
                 for frame in 0..frames {
                     let mut sum = 0f32;
                     for ch in 0..channels {
-                        sum += (buf.chan(ch)[frame] as f32 - 128.0) / 128.0;
+                        sum += (buf.chan(ch)[frame] as f32 - 128.0) / 128.0; // Normalize to [-1, 1]
                     }
-                    chunk_waveform.push(sum / channels as f32);
+                    chunk_waveform.push(sum / channels as f32); // Average across channels
                 }
             }
             AudioBufferRef::U16(buf) => {
+                // Process unsigned 16-bit PCM samples
                 for frame in 0..frames {
                     let mut sum = 0f32;
                     for ch in 0..channels {
-                        sum += (buf.chan(ch)[frame] as f32 - 32768.0) / 32768.0;
+                        sum += (buf.chan(ch)[frame] as f32 - 32768.0) / 32768.0; // Normalize to [-1, 1]
                     }
                     chunk_waveform.push(sum / channels as f32);
                 }
             }
             AudioBufferRef::U24(buf) => {
+                // Process unsigned 24-bit PCM samples
                 for frame in 0..frames {
                     let mut sum = 0f32;
                     for ch in 0..channels {
                         let sample = buf.chan(ch)[frame].inner() as i32 - 8_388_608;
-                        sum += (sample as f32) / 8_388_608.0;
+                        sum += (sample as f32) / 8_388_608.0; // Normalize to [-1, 1]
                     }
                     chunk_waveform.push(sum / channels as f32);
                 }
             }
             AudioBufferRef::U32(buf) => {
+                // Process unsigned 32-bit PCM samples
                 for frame in 0..frames {
                     let mut sum = 0f32;
                     for ch in 0..channels {
-                        sum += (buf.chan(ch)[frame] as f32 - 2_147_483_648.0) / 2_147_483_648.0;
+                        sum += (buf.chan(ch)[frame] as f32 - 2_147_483_648.0) / 2_147_483_648.0; // Normalize to [-1, 1]
                     }
                     chunk_waveform.push(sum / channels as f32);
                 }
             }
             AudioBufferRef::S8(buf) => {
+                // Process signed 8-bit PCM samples
                 for frame in 0..frames {
                     let mut sum = 0f32;
                     for ch in 0..channels {
-                        sum += buf.chan(ch)[frame] as f32 / i8::MAX as f32;
+                        sum += buf.chan(ch)[frame] as f32 / i8::MAX as f32; // Normalize to [-1, 1]
                     }
                     chunk_waveform.push(sum / channels as f32);
                 }
             }
             AudioBufferRef::S16(buf) => {
+                // Process signed 16-bit PCM samples
                 for frame in 0..frames {
                     let mut sum = 0f32;
                     for ch in 0..channels {
-                        sum += buf.chan(ch)[frame] as f32 / i16::MAX as f32;
+                        sum += buf.chan(ch)[frame] as f32 / i16::MAX as f32; // Normalize to [-1, 1]
                     }
                     chunk_waveform.push(sum / channels as f32);
                 }
             }
             AudioBufferRef::S24(buf) => {
+                // Process signed 24-bit PCM samples
                 for frame in 0..frames {
                     let mut sum = 0f32;
                     for ch in 0..channels {
                         let sample = buf.chan(ch)[frame].inner();
-                        sum += sample as f32 / 8_388_608.0;
+                        sum += sample as f32 / 8_388_608.0; // Normalize to [-1, 1]
                     }
                     chunk_waveform.push(sum / channels as f32);
                 }
             }
             AudioBufferRef::S32(buf) => {
+                // Process signed 32-bit PCM samples
                 for frame in 0..frames {
                     let mut sum = 0f32;
                     for ch in 0..channels {
-                        sum += buf.chan(ch)[frame] as f32 / i32::MAX as f32;
+                        sum += buf.chan(ch)[frame] as f32 / i32::MAX as f32; // Normalize to [-1, 1]
                     }
                     chunk_waveform.push(sum / channels as f32);
                 }
             }
             AudioBufferRef::F32(buf) => {
+                // Process 32-bit floating point PCM samples
                 for frame in 0..frames {
                     let mut sum = 0f32;
                     for ch in 0..channels {
-                        sum += buf.chan(ch)[frame];
+                        sum += buf.chan(ch)[frame]; // Already normalized in the range [-1, 1]
                     }
                     chunk_waveform.push(sum / channels as f32);
                 }
             }
             AudioBufferRef::F64(buf) => {
+                // Process 64-bit floating point PCM samples
                 for frame in 0..frames {
                     let mut sum = 0f32;
                     for ch in 0..channels {
-                        sum += buf.chan(ch)[frame] as f32;
+                        sum += buf.chan(ch)[frame] as f32; // Already normalized in the range [-1, 1]
                     }
                     chunk_waveform.push(sum / channels as f32);
                 }
             }
         }
 
-        chunk_waveform
+        chunk_waveform // Return the processed waveform chunk
     }
 
-    pub fn get_visible_waveform(&self, progress_secs: f32, window_size_secs: f32) -> &[f32] {
-        let samples_played = (progress_secs * self.sample_rate as f32) as usize;
-        let visible_length_samples = (window_size_secs * self.sample_rate as f32) as usize;
-
-        // Calculate start and end indices for the visible portion
-        let start_idx = samples_played.saturating_sub(visible_length_samples / 2);
-        let end_idx = (start_idx + visible_length_samples).min(self.buffer.len());
-
-        if start_idx < end_idx && !self.buffer.is_empty() {
-            &self.buffer[start_idx..end_idx]
-        } else {
-            &[]
-        }
-    }
-}
-
-// Optional: Add a helper struct to visualize the waveform
-pub struct WaveformVisualizer<'a> {
-    waveform: &'a [f32],
-    scale: f32,
-    color: egui::Color32,
-    stroke_width: f32,
-}
-
-impl<'a> WaveformVisualizer<'a> {
-    pub fn new(waveform: &'a [f32]) -> Self {
-        Self {
-            waveform,
-            scale: 1.0,
-            color: egui::Color32::LIGHT_BLUE,
-            stroke_width: 1.5,
-        }
-    }
-
-    pub fn with_scale(mut self, scale: f32) -> Self {
-        self.scale = scale;
-        self
-    }
-
-    pub fn with_color(mut self, color: egui::Color32) -> Self {
-        self.color = color;
-        self
-    }
-
-    pub fn with_stroke_width(mut self, width: f32) -> Self {
-        self.stroke_width = width;
-        self
-    }
-
-    pub fn draw(&self, ui: &mut egui::Ui) -> egui::Response {
-        // Get the available space
-        let rect = ui.available_rect_before_wrap();
-        let response = ui.allocate_rect(rect, egui::Sense::hover());
-
-        if !self.waveform.is_empty() {
-            let painter = ui.painter_at(rect);
-            let height = rect.height() * self.scale;
-            let center_y = rect.center().y;
-            let width = rect.width();
-
-            // Generate points for the waveform
-            let points: Vec<egui::Pos2> = self.waveform.iter().enumerate()
-                .map(|(i, &sample)| {
-                    let x = rect.left() + (i as f32 * width / self.waveform.len() as f32);
-                    let y = center_y - (sample * height / 2.0);
-                    egui::Pos2::new(x, y)
-                })
-                .collect();
-
-            // Draw the waveform
-            if points.len() > 1 {
-                painter.add(egui::Shape::line(
-                    points,
-                    egui::Stroke::new(self.stroke_width, self.color)
-                ));
-            }
-        } else {
-            // Draw a placeholder when no waveform data is available
-            let painter = ui.painter_at(rect);
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "Loading...",
-                egui::FontId::default(),
-                egui::Color32::GRAY,
-            );
-        }
-
-        response
-    }
 }
