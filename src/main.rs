@@ -1,17 +1,12 @@
-use std::fs::File;
-use std::io::BufReader;
-use eframe::egui::{Slider, Sense, Label, Color32, FontId, Align2, Stroke, Frame, pos2, Pos2, ScrollArea};
+use eframe::egui::{Slider, Color32, Stroke, Pos2, ScrollArea};
 use std::time::{Duration, Instant};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Sender, Receiver, channel};
 use symphonia::default::{get_probe, get_codecs};
 use symphonia::core::audio::Signal;
-use eframe::egui::{self, CentralPanel, Context, SidePanel, Button};
-use rfd::FileDialog;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sample, Sink, Source};
+use eframe::egui::{self, CentralPanel, Context, SidePanel};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use walkdir::WalkDir;
-use hound;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::errors::Error;
 
@@ -214,7 +209,7 @@ impl MyApp {
                                     for frame in 0..frames {
                                         let mut sum = 0f32;
                                         for ch in 0..channels {
-                                            let sample = buf.chan(ch)[frame].into_u32() as i32 - 8_388_608;
+                                            let sample = buf.chan(ch)[frame].inner() as i32 - 8_388_608;
                                             sum += (sample as f32 - 8_388_608.0) / 8_388_608.0;
                                         }
                                         chunk_waveform.push(sum / channels as f32);
@@ -252,7 +247,7 @@ impl MyApp {
                                     for frame in 0..frames {
                                         let mut sum = 0f32;
                                         for ch in 0..channels {
-                                            let sample = buf.chan(ch)[frame].into_i32();
+                                            let sample = buf.chan(ch)[frame].inner();
                                             sum += sample as f32 / 8_388_608.0;
                                         }
                                         chunk_waveform.push(sum / channels as f32);
@@ -284,11 +279,6 @@ impl MyApp {
                                         }
                                         chunk_waveform.push(sum / channels as f32);
                                     }
-                                }
-                                _ => {
-                                    // Graceful no-op: Ignore unknown formats or log message.
-                                    eprintln!("Encountered unsupported audio buffer format.");
-                                    continue;
                                 }
                             }
                             tx.send(chunk_waveform).expect("Waveform send error");
