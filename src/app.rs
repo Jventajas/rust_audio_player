@@ -242,8 +242,12 @@ impl AudioPlayerApp {
             &[] as &[f32]
         };
 
+        // Allocate space and painter for waveform
         let waveform_rect = ui.available_rect_before_wrap();
         let painter = ui.painter_at(waveform_rect);
+
+        // Fill the background with black
+        painter.rect_filled(waveform_rect, 0.0, egui::Color32::BLACK);
 
         if !displayed_waveform.is_empty() {
             let wave_height = waveform_rect.height() / 2.0;
@@ -268,7 +272,7 @@ impl AudioPlayerApp {
             painter.text(
                 waveform_rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Loading...",
+                "Select audio file to play...",
                 egui::FontId::default(),
                 Color32::GRAY,
             );
