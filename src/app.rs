@@ -202,20 +202,20 @@ impl AudioPlayerApp {
                     });
                 });
 
-                ui.add_space(10.0);  // Spacer to guarantee separation
 
-                // 3. Buttons
-                ui.allocate_ui(Vec2::new(available_width, buttons_height), |ui| {
-                    ui.horizontal_centered(|ui| {
-                        if Self::styled_icon_button(ui, "Pause", "⏸").clicked() {
-                            self.player.pause();
+                ui.with_layout(Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
+                    ui.horizontal(|ui| {
+                        let total_button_width = 3.0 * 40.0;
+                        let available_width = ui.available_width();
+                        let spacing = (available_width - total_button_width) / 3.0;
+
+                        if spacing > 0.0 {
+                            ui.add_space(spacing);
                         }
-                        if Self::styled_icon_button(ui, "Resume", "▶").clicked() {
-                            self.player.resume();
-                        }
-                        if Self::styled_icon_button(ui, "Stop", "⏹").clicked() {
-                            self.player.stop();
-                        }
+
+                        AudioPlayerApp::styled_icon_button(ui, "Play", "▶");
+                        AudioPlayerApp::styled_icon_button(ui, "Pause", "⏸");
+                        AudioPlayerApp::styled_icon_button(ui, "Stop", "⏹");
                     });
                 });
 
