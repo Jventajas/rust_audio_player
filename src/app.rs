@@ -1,7 +1,7 @@
 use crate::audio::player::AudioPlayer;
 use crate::audio::waveform::WaveformGenerator;
 use crate::utils::file_scanner::AudioFileScanner;
-use eframe::egui::{self, Color32, Context, CentralPanel, Pos2, ScrollArea, SidePanel, Slider, Stroke, Vec2, Layout};
+use eframe::egui::{self, Color32, Context, CentralPanel, Pos2, ScrollArea, SidePanel, Slider, Stroke, Vec2, Layout, Rect};
 use eframe::Frame;
 use std::time::Duration;
 use std::path::Path;
@@ -11,6 +11,10 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use std::fs::File;
+
+
+const ACCENT_COLOR: egui::Color32 = egui::Color32::from_rgb(0x03, 0x45, 0xfc);
+const LIGHTER_ACCENT_COLOR: egui::Color32 = egui::Color32::from_rgb(0x66, 0x99, 0xFF);
 
 
 pub struct MyApp {
@@ -87,7 +91,7 @@ impl MyApp {
         });
     }
 
-    pub fn render_main_panel(&mut self, ctx: &Context) {
+    pub fn render_main_panel(&mut self, ctx: &egui::Context) {
         CentralPanel::default().show(ctx, |ui| {
             let available_height = ui.available_height();
             ui.allocate_ui_with_layout(
@@ -114,22 +118,68 @@ impl MyApp {
                         Vec2::new(ui.available_width(), available_height * 0.25),
                         Layout::top_down(egui::Align::Center),
                         |ui| {
-                            let progress = self.player.progress().as_secs_f32();
-                            let total = self.total_duration.as_secs_f32();
-                            let mut ratio = if total > 0.0 { progress / total * 100.0 } else { 0.0 };
+                            let progress_secs = self.player.progress().as_secs();
+                            let total_secs = self.total_duration.as_secs();
 
-                            ui.add(
-                                Slider::new(&mut ratio, 0.0..=100.0)
-                                    .text("Progress")
-                                    .show_value(true),
+                            let ratio = if total_secs > 0 {
+                                (progress_secs as f32 / total_secs as f32).clamp(0.0, 1.0)
+                            } else {
+                                0.0
+                            };
+
+                            // Formatting minutes and seconds
+                            let progress_minutes = progress_secs / 60;
+                            let progress_remaining_secs = progress_secs % 60;
+                            let total_minutes = total_secs / 60;
+                            let total_remaining_secs = total_secs % 60;
+
+                            // Slightly reduced vertical height
+                            let bar_height = 6.0;
+
+                            // Padding from sides
+                            let horizontal_padding = 12.0;
+                            let total_bar_width = ui.available_width() - (horizontal_padding * 2.0);
+
+                            ui.add_space(5.0); // vertical spacing above bar
+
+                            // Allocate full width first
+                            let (outer_rect, _) = ui.allocate_exact_size(
+                                Vec2::new(ui.available_width(), bar_height),
+                                egui::Sense::hover(),
                             );
 
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{:.2} sec", progress));
-                                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                                    ui.label(format!("{:.2} sec", total));
-                                });
-                            });
+                            // Create modified rectangle applying padding at BOTH SIDES
+                            let bar_rect = Rect {
+                                min: outer_rect.min + Vec2::new(horizontal_padding, 0.0),
+                                max: outer_rect.max - Vec2::new(horizontal_padding, 0.0),
+                            };
+
+                            // Draw background (unplayed section of bar)
+                            ui.painter().rect_filled(bar_rect, 3.0, LIGHTER_ACCENT_COLOR);
+
+                            // Draw foreground (played section of bar)
+                            let played_rect = Rect {
+                                min: bar_rect.min,
+                                max: egui::pos2(bar_rect.min.x + bar_rect.width() * ratio, bar_rect.max.y),
+                            };
+                            ui.painter().rect_filled(played_rect, 3.0, ACCENT_COLOR);
+
+                            ui.add_space(5.0); // vertical spacing below bar
+
+                            // Time text with the SAME horizontal padding applied for alignment
+                            ui.allocate_ui_with_layout(
+                                Vec2::new(ui.available_width(), 20.0),
+                                Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.add_space(horizontal_padding);  // left padding
+                                    ui.label(format!("{}:{:02}", progress_minutes, progress_remaining_secs));
+
+                                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                                        ui.add_space(horizontal_padding);  // right padding
+                                        ui.label(format!("{}:{:02}", total_minutes, total_remaining_secs));
+                                    });
+                                },
+                            );
                         },
                     );
                 },
