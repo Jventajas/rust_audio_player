@@ -17,7 +17,7 @@ const ACCENT_COLOR: egui::Color32 = egui::Color32::from_rgb(0x03, 0x45, 0xfc);
 const LIGHTER_ACCENT_COLOR: egui::Color32 = egui::Color32::from_rgb(0x66, 0x99, 0xFF);
 
 
-pub struct MyApp {
+pub struct AudioPlayerApp {
     audio_files: Vec<String>,
     directory: Option<String>,
     player: AudioPlayer,
@@ -25,19 +25,23 @@ pub struct MyApp {
     total_duration: Duration,
 }
 
-impl Default for MyApp {
+impl Default for AudioPlayerApp {
     fn default() -> Self {
-        Self {
+        let mut app = Self {
             audio_files: Vec::new(),
-            directory: None,
+            directory: dirs::audio_dir().map(|p| p.to_string_lossy().to_string()),
             player: AudioPlayer::default(),
             waveform: WaveformGenerator::default(),
-            total_duration: Duration::from_secs(0),
-        }
+            total_duration: Duration::ZERO,
+        };
+
+        app.scan_audio_files(); // Scan files immediately on startup
+        app
     }
 }
 
-impl eframe::App for MyApp {
+
+impl eframe::App for AudioPlayerApp {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
         ctx.request_repaint_after(Duration::from_millis(30));
         self.waveform.update_buffer();
@@ -46,25 +50,60 @@ impl eframe::App for MyApp {
     }
 }
 
-impl MyApp {
+impl AudioPlayerApp {
     fn render_ui(&mut self, ctx: &Context) {
         self.render_sidebar(ctx);
         self.render_main_panel(ctx);
     }
 
     fn render_sidebar(&mut self, ctx: &Context) {
-        SidePanel::left("side_panel").default_width(200.0).show(ctx, |ui| {
-            ui.heading("Audio Player");
+        SidePanel::left("side_panel").default_width(300.0).show(ctx, |ui| {
+
+            ui.add_space(10.0); // Adjust this value for more or less space
+
+            // Centered heading with horizontal alignment
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::left_to_right(egui::Align::Center).with_main_justify(true), |ui| {
+                    ui.colored_label(Color32::WHITE, egui::RichText::new("Select file to play").heading());
+                });
+            });
+
+            ui.add_space(10.0); // Adjust this value for more or less space
+
+
             ui.separator();
 
-            if ui.button("Select Directory").clicked() {
-                if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                    self.directory = Some(dir.display().to_string());
-                    self.scan_audio_files();
+            ui.add_space(10.0); // Adjust this value for more or less space
+
+            ui.horizontal(|ui| {
+                let available_width = ui.available_width();
+                let button_size = egui::vec2(100.0, 20.0);
+
+                let indent = (available_width - button_size.x) / 2.0;
+                ui.add_space(indent);
+
+                let button_response = ui.scope(|ui| {
+                    ui.spacing_mut().button_padding = egui::Vec2::new(12.0, 8.0);
+
+                    ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("Browse")
+                                .color(egui::Color32::WHITE)
+                                .size(18.0),
+                        )
+                            .fill(ACCENT_COLOR)
+                            .rounding(egui::Rounding::same(4)),
+                    )
+
+                });
+
+                if button_response.inner.clicked() {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        self.directory = Some(dir.display().to_string());
+                        self.scan_audio_files();
+                    }
                 }
-            }
-
-            ui.separator();
+            });
 
             let mut file_to_play: Option<String> = None;
 
