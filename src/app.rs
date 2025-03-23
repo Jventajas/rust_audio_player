@@ -59,37 +59,31 @@ impl AudioPlayerApp {
     fn render_sidebar(&mut self, ctx: &Context) {
         SidePanel::left("side_panel").default_width(300.0).show(ctx, |ui| {
 
-            ui.add_space(10.0); // Adjust this value for more or less space
+            ui.add_space(10.0);
 
-            // Centered heading with horizontal alignment
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::left_to_right(egui::Align::Center).with_main_justify(true), |ui| {
                     ui.colored_label(Color32::WHITE, egui::RichText::new("Select file to play").heading());
                 });
             });
 
-            ui.add_space(10.0); // Adjust this value for more or less space
-
-
-            ui.separator();
-
-            ui.add_space(10.0); // Adjust this value for more or less space
+            ui.add_space(15.0);
 
             ui.horizontal(|ui| {
                 let available_width = ui.available_width();
                 let button_size = egui::vec2(100.0, 20.0);
 
-                let indent = (available_width - button_size.x) / 2.0;
+                let indent = (available_width) / 2.0 - button_size.x / 3.0;
                 ui.add_space(indent);
 
                 let button_response = ui.scope(|ui| {
-                    ui.spacing_mut().button_padding = egui::Vec2::new(12.0, 8.0);
+                    ui.spacing_mut().button_padding = Vec2::new(14.0, 8.0);
 
                     ui.add(
                         egui::Button::new(
                             egui::RichText::new("Browse")
-                                .color(egui::Color32::WHITE)
-                                .size(18.0),
+                                .color(Color32::WHITE)
+                                .size(14.0),
                         )
                             .fill(ACCENT_COLOR)
                             .rounding(egui::Rounding::same(4)),
@@ -105,25 +99,32 @@ impl AudioPlayerApp {
                 }
             });
 
+            ui.add_space(10.0);
+
+            ui.separator();
+
             let mut file_to_play: Option<String> = None;
 
-            ScrollArea::vertical().show(ui, |ui| {
-                for file in &self.audio_files {
-                    let file_name = Path::new(file)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
+            egui::Frame::default()
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    ScrollArea::vertical().show(ui, |ui| {
+                        for file in &self.audio_files {
+                            let file_name = Path::new(file)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
 
-                    let is_current = self.player.current_file()
-                        .map_or(false, |current| current == file);
+                            let is_current = self.player.current_file()
+                                .map_or(false, |current| current == file);
 
-                    if ui.selectable_label(is_current, &file_name).clicked() {
-                        file_to_play = Some(file.clone());
-                    }
-                }
-            });
-
+                            if ui.selectable_label(is_current, &file_name).clicked() {
+                                file_to_play = Some(file.clone());
+                            }
+                        }
+                    });
+                });
             if let Some(file) = file_to_play {
                 self.play_file(&file);
             }
