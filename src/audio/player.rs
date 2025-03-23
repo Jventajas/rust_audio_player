@@ -78,6 +78,16 @@ impl AudioPlayer {
         self.playing_file = None;
     }
 
+    pub fn is_paused(&self) -> bool {
+        if let Some(sink) = &self.sink {
+            let sink_guard = sink.lock().unwrap();
+            sink_guard.is_paused()
+        } else {
+            false
+        }
+    }
+
+
     pub fn progress(&self) -> Duration {
         if let Some(sink) = &self.sink {
             let sink_guard = sink.lock().unwrap();

@@ -202,9 +202,30 @@ impl AudioPlayerApp {
                             ui.add_space(spacing);
                         }
 
-                        AudioPlayerApp::styled_icon_button(ui, "Play", "▶");
-                        AudioPlayerApp::styled_icon_button(ui, "Pause", "⏸");
-                        AudioPlayerApp::styled_icon_button(ui, "Stop", "⏹");
+                        let play_response = AudioPlayerApp::styled_icon_button(ui, "Play", "▶");
+                        if play_response.clicked() {
+                            let file_path = self.player.current_file().map(ToOwned::to_owned);
+                            if let Some(file_path) = file_path {
+                                // If a file was paused, resume it
+                                if self.player.is_paused() {
+                                    self.player.resume();
+                                } else {
+                                    // Otherwise play the current file again
+                                    self.play_file(&file_path);
+                                }
+                            }
+                        }
+
+                        let pause_response = AudioPlayerApp::styled_icon_button(ui, "Pause", "⏸");
+                        if pause_response.clicked() {
+                            self.player.pause();
+                        }
+
+                        let stop_response = AudioPlayerApp::styled_icon_button(ui, "Stop", "⏹");
+                        if stop_response.clicked() {
+                            self.player.stop();
+                        }
+
                     });
                 });
 
