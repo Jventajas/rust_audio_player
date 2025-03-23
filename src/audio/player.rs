@@ -58,11 +58,29 @@ impl AudioPlayer {
         }
     }
 
-    pub fn resume(&mut self) {
-        if let Some(sink) = &self.sink {
-            let sink_guard = sink.lock().unwrap();
-            sink_guard.play();
+    pub fn resume(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let should_resume = if let Some(sink_arc) = &self.sink {
+            sink_arc.lock().unwrap().is_paused()
+        } else {
+            false
+        };
+
+        let file_path_to_play = if self.sink.is_none() {
+            self.playing_file.clone()
+        } else {
+            None
+        };
+
+        if should_resume {
+            if let Some(sink_arc) = &self.sink {
+                sink_arc.lock().unwrap().play();
+            }
             self.start_time = Some(Instant::now());
+            Ok(())
+        } else if let Some(file_path) = file_path_to_play {
+            self.play(&file_path)
+        } else {
+            Ok(())
         }
     }
 
@@ -75,7 +93,6 @@ impl AudioPlayer {
         self.sink = None;
         self.start_time = None;
         self.pause_duration = Duration::ZERO;
-        self.playing_file = None;
     }
 
     pub fn is_paused(&self) -> bool {

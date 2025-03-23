@@ -208,7 +208,10 @@ impl AudioPlayerApp {
                             if let Some(file_path) = file_path {
                                 // If a file was paused, resume it
                                 if self.player.is_paused() {
-                                    self.player.resume();
+                                    if let Err(e) = self.player.resume() {
+                                        eprintln!("Failed to resume playback: {}", e);
+                                    }
+
                                 } else {
                                     // Otherwise play the current file again
                                     self.play_file(&file_path);
