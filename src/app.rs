@@ -141,13 +141,13 @@ impl AudioPlayerApp {
                         Vec2::new(ui.available_width(), available_height * 0.25),
                         Layout::left_to_right(egui::Align::Center),
                         |ui| {
-                            if ui.button("⏸ Pause").clicked() {
+                            if Self::styled_icon_button(ui, "Pause", "⏸").clicked() {
                                 self.player.pause();
                             }
-                            if ui.button("▶ Resume").clicked() {
+                            if Self::styled_icon_button(ui, "Resume", "▶").clicked() {
                                 self.player.resume();
                             }
-                            if ui.button("⏹ Stop").clicked() {
+                            if Self::styled_icon_button(ui, "Stop", "⏹").clicked() {
                                 self.player.stop();
                             }
                         },
@@ -335,5 +335,19 @@ impl AudioPlayerApp {
         }
 
         Err("Could not determine audio duration".into())
+    }
+
+    fn styled_icon_button(ui: &mut egui::Ui, label: &str, icon: &str) -> egui::Response {
+        ui.add_sized(
+            egui::vec2(90.0, 30.0), // Adjust width/height as needed
+            egui::Button::new(
+                egui::RichText::new(format!("{} {}", icon, label))
+                    .color(egui::Color32::WHITE)
+                    .size(14.0), // adjust font size to match your "Browse" button
+            )
+                .fill(ACCENT_COLOR)
+                .rounding(egui::Rounding::same(4))
+                .frame(true),
+        )
     }
 }
