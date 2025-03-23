@@ -133,105 +133,93 @@ impl AudioPlayerApp {
 
     pub fn render_main_panel(&mut self, ctx: &egui::Context) {
         CentralPanel::default().show(ctx, |ui| {
+            // Calculate available space
+            let available_width = ui.available_width();
             let available_height = ui.available_height();
-            ui.allocate_ui_with_layout(
-                Vec2::new(ui.available_width(), available_height * 0.5),
-                Layout::top_down(egui::Align::Center),
-                |ui| {
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(ui.available_width(), available_height * 0.25),
-                        Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            if Self::styled_icon_button(ui, "Pause", "⏸").clicked() {
-                                self.player.pause();
-                            }
-                            if Self::styled_icon_button(ui, "Resume", "▶").clicked() {
-                                self.player.resume();
-                            }
-                            if Self::styled_icon_button(ui, "Stop", "⏹").clicked() {
-                                self.player.stop();
-                            }
-                        },
-                    );
 
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(ui.available_width(), available_height * 0.25),
-                        Layout::top_down(egui::Align::Center),
-                        |ui| {
-                            let progress_secs = self.player.progress().as_secs();
-                            let total_secs = self.total_duration.as_secs();
+            // Explicit proportions for each part:
+            let waveform_height = available_height * 0.5;
+            let play_bar_height = available_height * 0.2;
+            let buttons_height = available_height * 0.2;
 
-                            let ratio = if total_secs > 0 {
-                                (progress_secs as f32 / total_secs as f32).clamp(0.0, 1.0)
-                            } else {
-                                0.0
-                            };
+            ui.with_layout(Layout::top_down(egui::Align::Min), |ui| {
 
-                            // Formatting minutes and seconds
-                            let progress_minutes = progress_secs / 60;
-                            let progress_remaining_secs = progress_secs % 60;
-                            let total_minutes = total_secs / 60;
-                            let total_remaining_secs = total_secs % 60;
-
-                            // Slightly reduced vertical height
-                            let bar_height = 6.0;
-
-                            // Padding from sides
-                            let horizontal_padding = 12.0;
-                            let total_bar_width = ui.available_width() - (horizontal_padding * 2.0);
-
-                            ui.add_space(5.0); // vertical spacing above bar
-
-                            // Allocate full width first
-                            let (outer_rect, _) = ui.allocate_exact_size(
-                                Vec2::new(ui.available_width(), bar_height),
-                                egui::Sense::hover(),
-                            );
-
-                            // Create modified rectangle applying padding at BOTH SIDES
-                            let bar_rect = Rect {
-                                min: outer_rect.min + Vec2::new(horizontal_padding, 0.0),
-                                max: outer_rect.max - Vec2::new(horizontal_padding, 0.0),
-                            };
-
-                            // Draw background (unplayed section of bar)
-                            ui.painter().rect_filled(bar_rect, 3.0, LIGHTER_ACCENT_COLOR);
-
-                            // Draw foreground (played section of bar)
-                            let played_rect = Rect {
-                                min: bar_rect.min,
-                                max: egui::pos2(bar_rect.min.x + bar_rect.width() * ratio, bar_rect.max.y),
-                            };
-                            ui.painter().rect_filled(played_rect, 3.0, ACCENT_COLOR);
-
-                            ui.add_space(5.0); // vertical spacing below bar
-
-                            // Time text with the SAME horizontal padding applied for alignment
-                            ui.allocate_ui_with_layout(
-                                Vec2::new(ui.available_width(), 20.0),
-                                Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    ui.add_space(horizontal_padding);  // left padding
-                                    ui.label(format!("{}:{:02}", progress_minutes, progress_remaining_secs));
-
-                                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                                        ui.add_space(horizontal_padding);  // right padding
-                                        ui.label(format!("{}:{:02}", total_minutes, total_remaining_secs));
-                                    });
-                                },
-                            );
-                        },
-                    );
-                },
-            );
-
-            ui.allocate_ui_with_layout(
-                Vec2::new(ui.available_width(), available_height * 0.5),
-                Layout::centered_and_justified(egui::Direction::LeftToRight),
-                |ui| {
+                // 1. Waveform
+                ui.allocate_ui(Vec2::new(available_width, waveform_height), |ui| {
                     self.render_waveform(ui);
-                },
-            );
+                });
+
+                ui.add_space(10.0);  // Spacer to guarantee separation
+
+                // 2. Play bar
+                ui.allocate_ui(Vec2::new(available_width, play_bar_height), |ui| {
+                    let progress_secs = self.player.progress().as_secs();
+                    let total_secs = self.total_duration.as_secs();
+
+                    let ratio = if total_secs > 0 {
+                        (progress_secs as f32 / total_secs as f32).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+
+                    // Bar parameters
+                    let bar_height = 6.0;
+                    let horizontal_padding = 12.0;
+
+                    ui.add_space(5.0); // vertical margin (top)
+
+                    // Allocate rect for the play bar explicitly
+                    let (outer_rect, _) = ui.allocate_exact_size(
+                        Vec2::new(available_width, bar_height),
+                        egui::Sense::hover(),
+                    );
+
+                    // Compute inner rect with horizontal padding
+                    let bar_rect = Rect {
+                        min: outer_rect.min + Vec2::new(horizontal_padding, 0.0),
+                        max: outer_rect.max - Vec2::new(horizontal_padding, 0.0),
+                    };
+
+                    // Draw background and progress indicator
+                    ui.painter().rect_filled(bar_rect, 3.0, LIGHTER_ACCENT_COLOR);
+                    let played_rect = Rect {
+                        min: bar_rect.min,
+                        max: egui::pos2(bar_rect.min.x + bar_rect.width() * ratio, bar_rect.max.y),
+                    };
+                    ui.painter().rect_filled(played_rect, 3.0, ACCENT_COLOR);
+
+                    ui.add_space(5.0); // vertical margin (bottom)
+
+                    // Time labels
+                    ui.horizontal(|ui| {
+                        ui.add_space(horizontal_padding);
+                        ui.label(format!("{:02}:{:02}", progress_secs / 60, progress_secs % 60));
+
+                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_space(horizontal_padding);
+                            ui.label(format!("{:02}:{:02}", total_secs / 60, total_secs % 60));
+                        });
+                    });
+                });
+
+                ui.add_space(10.0);  // Spacer to guarantee separation
+
+                // 3. Buttons
+                ui.allocate_ui(Vec2::new(available_width, buttons_height), |ui| {
+                    ui.horizontal_centered(|ui| {
+                        if Self::styled_icon_button(ui, "Pause", "⏸").clicked() {
+                            self.player.pause();
+                        }
+                        if Self::styled_icon_button(ui, "Resume", "▶").clicked() {
+                            self.player.resume();
+                        }
+                        if Self::styled_icon_button(ui, "Stop", "⏹").clicked() {
+                            self.player.stop();
+                        }
+                    });
+                });
+
+            });
         });
     }
 
