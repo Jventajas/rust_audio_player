@@ -133,25 +133,20 @@ impl AudioPlayerApp {
 
     pub fn render_main_panel(&mut self, ctx: &egui::Context) {
         CentralPanel::default().show(ctx, |ui| {
-            // Calculate available space
             let available_width = ui.available_width();
             let available_height = ui.available_height();
 
-            // Explicit proportions for each part:
             let waveform_height = available_height * 0.5;
             let play_bar_height = available_height * 0.2;
-            let buttons_height = available_height * 0.2;
 
             ui.with_layout(Layout::top_down(egui::Align::Min), |ui| {
 
-                // 1. Waveform
                 ui.allocate_ui(Vec2::new(available_width, waveform_height), |ui| {
                     self.render_waveform(ui);
                 });
 
-                ui.add_space(10.0);  // Spacer to guarantee separation
+                ui.add_space(10.0);
 
-                // 2. Play bar
                 ui.allocate_ui(Vec2::new(available_width, play_bar_height), |ui| {
                     let progress_secs = self.player.progress().as_secs();
                     let total_secs = self.total_duration.as_secs();
@@ -162,25 +157,21 @@ impl AudioPlayerApp {
                         0.0
                     };
 
-                    // Bar parameters
                     let bar_height = 6.0;
                     let horizontal_padding = 12.0;
 
                     ui.add_space(5.0); // vertical margin (top)
 
-                    // Allocate rect for the play bar explicitly
                     let (outer_rect, _) = ui.allocate_exact_size(
                         Vec2::new(available_width, bar_height),
                         egui::Sense::hover(),
                     );
 
-                    // Compute inner rect with horizontal padding
                     let bar_rect = Rect {
                         min: outer_rect.min + Vec2::new(horizontal_padding, 0.0),
                         max: outer_rect.max - Vec2::new(horizontal_padding, 0.0),
                     };
 
-                    // Draw background and progress indicator
                     ui.painter().rect_filled(bar_rect, 3.0, LIGHTER_ACCENT_COLOR);
                     let played_rect = Rect {
                         min: bar_rect.min,
@@ -188,9 +179,8 @@ impl AudioPlayerApp {
                     };
                     ui.painter().rect_filled(played_rect, 3.0, ACCENT_COLOR);
 
-                    ui.add_space(5.0); // vertical margin (bottom)
+                    ui.add_space(5.0);
 
-                    // Time labels
                     ui.horizontal(|ui| {
                         ui.add_space(horizontal_padding);
                         ui.label(format!("{:02}:{:02}", progress_secs / 60, progress_secs % 60));
@@ -201,7 +191,6 @@ impl AudioPlayerApp {
                         });
                     });
                 });
-
 
                 ui.with_layout(Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
                     ui.horizontal(|ui| {
@@ -242,11 +231,9 @@ impl AudioPlayerApp {
             &[] as &[f32]
         };
 
-        // Allocate space and painter for waveform
         let waveform_rect = ui.available_rect_before_wrap();
         let painter = ui.painter_at(waveform_rect);
 
-        // Fill the background with black
         painter.rect_filled(waveform_rect, 0.0, egui::Color32::BLACK);
 
         if !displayed_waveform.is_empty() {
@@ -332,11 +319,11 @@ impl AudioPlayerApp {
 
     fn styled_icon_button(ui: &mut egui::Ui, label: &str, icon: &str) -> egui::Response {
         ui.add_sized(
-            egui::vec2(90.0, 30.0), // Adjust width/height as needed
+            egui::vec2(90.0, 30.0),
             egui::Button::new(
                 egui::RichText::new(format!("{} {}", icon, label))
                     .color(egui::Color32::WHITE)
-                    .size(14.0), // adjust font size to match your "Browse" button
+                    .size(14.0),
             )
                 .fill(ACCENT_COLOR)
                 .rounding(egui::Rounding::same(4))
