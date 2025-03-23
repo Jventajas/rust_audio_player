@@ -1,7 +1,7 @@
 use crate::audio::player::AudioPlayer;
 use crate::audio::waveform::WaveformGenerator;
 use crate::utils::file_scanner::AudioFileScanner;
-use eframe::egui::{self, Color32, Context, CentralPanel, Pos2, ScrollArea, SidePanel, Slider, Stroke};
+use eframe::egui::{self, Color32, Context, CentralPanel, Pos2, ScrollArea, SidePanel, Slider, Stroke, Vec2, Layout};
 use eframe::Frame;
 use std::time::Duration;
 use std::path::Path;
@@ -87,45 +87,64 @@ impl MyApp {
         });
     }
 
-    fn render_main_panel(&mut self, ctx: &Context) {
+    pub fn render_main_panel(&mut self, ctx: &Context) {
         CentralPanel::default().show(ctx, |ui| {
-            // Control buttons
-            ui.horizontal(|ui| {
-                if ui.button("⏸ Pause").clicked() {
-                    self.player.pause();
-                }
-                if ui.button("▶ Resume").clicked() {
-                    self.player.resume();
-                }
-                if ui.button("⏹ Stop").clicked() {
-                    self.player.stop();
-                }
-            });
+            let available_height = ui.available_height();
+            ui.allocate_ui_with_layout(
+                Vec2::new(ui.available_width(), available_height * 0.5),
+                Layout::top_down(egui::Align::Center),
+                |ui| {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(ui.available_width(), available_height * 0.25),
+                        Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            if ui.button("⏸ Pause").clicked() {
+                                self.player.pause();
+                            }
+                            if ui.button("▶ Resume").clicked() {
+                                self.player.resume();
+                            }
+                            if ui.button("⏹ Stop").clicked() {
+                                self.player.stop();
+                            }
+                        },
+                    );
 
-            let progress = self.player.progress().as_secs_f32();
-            let total = self.total_duration.as_secs_f32();
-            let ratio = if total > 0.0 { progress / total } else { 0.0 };
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(ui.available_width(), available_height * 0.25),
+                        Layout::top_down(egui::Align::Center),
+                        |ui| {
+                            let progress = self.player.progress().as_secs_f32();
+                            let total = self.total_duration.as_secs_f32();
+                            let mut ratio = if total > 0.0 { progress / total * 100.0 } else { 0.0 };
 
-            ui.add(Slider::new(&mut (ratio * 100.0), 0.0..=100.0).text("Progress").show_value(true));
+                            ui.add(
+                                Slider::new(&mut ratio, 0.0..=100.0)
+                                    .text("Progress")
+                                    .show_value(true),
+                            );
 
-            ui.horizontal(|ui| {
-                ui.label(format!("{:.2} sec", progress));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!("{:.2} sec", total));
-                });
-            });
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{:.2} sec", progress));
+                                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.label(format!("{:.2} sec", total));
+                                });
+                            });
+                        },
+                    );
+                },
+            );
 
-            ui.separator();
-            self.render_waveform(ui);
-
-            let progress_ratio = progress / self.total_duration.as_secs_f32().max(1.0);
-            ui.horizontal(|ui| {
-                ui.label(format!("{:.1} sec", progress));
-                ui.add(egui::ProgressBar::new(progress_ratio).show_percentage());
-                ui.label(format!("{:.1} sec", self.total_duration.as_secs_f32()));
-            });
+            ui.allocate_ui_with_layout(
+                Vec2::new(ui.available_width(), available_height * 0.5),
+                Layout::centered_and_justified(egui::Direction::LeftToRight),
+                |ui| {
+                    self.render_waveform(ui);
+                },
+            );
         });
     }
+
 
     fn render_waveform(&self, ui: &mut egui::Ui) {
         let progress_secs = self.player.progress().as_secs_f32();
