@@ -1,7 +1,7 @@
 use crate::audio::player::AudioPlayer;
 use crate::audio::waveform::WaveformGenerator;
 use crate::utils::file_scanner::AudioFileScanner;
-use eframe::egui::{self, Color32, Context, CentralPanel, Pos2, ScrollArea, SidePanel, Slider, Stroke, Vec2, Layout, Rect};
+use eframe::egui::{self, Color32, Context, CentralPanel, Pos2, ScrollArea, SidePanel, Stroke, Vec2, Layout, Rect};
 use eframe::Frame;
 use std::time::Duration;
 use std::path::Path;
@@ -13,8 +13,8 @@ use symphonia::core::probe::Hint;
 use std::fs::File;
 
 
-const ACCENT_COLOR: egui::Color32 = egui::Color32::from_rgb(0x03, 0x45, 0xfc);
-const LIGHTER_ACCENT_COLOR: egui::Color32 = egui::Color32::from_rgb(0x66, 0x99, 0xFF);
+const ACCENT_COLOR: Color32 = Color32::from_rgb(0x03, 0x45, 0xfc);
+const LIGHTER_ACCENT_COLOR: Color32 = Color32::from_rgb(0x66, 0x99, 0xFF);
 
 
 pub struct AudioPlayerApp {
@@ -131,7 +131,7 @@ impl AudioPlayerApp {
         });
     }
 
-    pub fn render_main_panel(&mut self, ctx: &egui::Context) {
+    pub fn render_main_panel(&mut self, ctx: &Context) {
         CentralPanel::default().show(ctx, |ui| {
             let available_width = ui.available_width();
             let available_height = ui.available_height();
@@ -234,7 +234,7 @@ impl AudioPlayerApp {
         let waveform_rect = ui.available_rect_before_wrap();
         let painter = ui.painter_at(waveform_rect);
 
-        painter.rect_filled(waveform_rect, 0.0, egui::Color32::BLACK);
+        painter.rect_filled(waveform_rect, 0.0, Color32::BLACK);
 
         if !displayed_waveform.is_empty() {
             let wave_height = waveform_rect.height() / 2.0;
